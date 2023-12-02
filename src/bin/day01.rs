@@ -1,42 +1,26 @@
-use std::process::ExitCode;
+use anyhow::Result;
+use aoc::runner;
 
-fn main() -> ExitCode {
-    let mut args = std::env::args();
-    let cmd = args
-        .nth(1)
-        .expect("usage: cmd [1|2] input_file_path. cmd is missing");
-    let input_file_path = args
-        .next()
-        .expect("usage: cmd [1|2] input_file_path. input_file_path is missing");
-    let input = std::fs::read_to_string(input_file_path).expect("unable to read input file");
-    match cmd.as_str() {
-        "1" => {
-            println!("{}", part_one(&input));
-            ExitCode::SUCCESS
-        }
-        "2" => {
-            println!("{}", part_two(&input));
-            ExitCode::SUCCESS
-        }
-        u => {
-            eprintln!("unknown cmd: {u}");
-            ExitCode::from(1)
-        }
-    }
+fn main() -> Result<()> {
+    runner(part_one, part_two)
 }
 
-fn part_one(input: &str) -> u32 {
-    fn parse_number(line: &str) -> u32 {
+fn part_one(input: &str) -> Result<u32> {
+    fn part_one_parse_number(line: &str) -> u32 {
         let first_digit = line.chars().find_map(|c| c.to_digit(10)).unwrap_or(0);
         let last_digit = line.chars().rev().find_map(|c| c.to_digit(10)).unwrap_or(0);
         first_digit * 10 + last_digit
     }
 
-    input.lines().map(|l| parse_number(l)).sum()
+    Ok(input.lines().map(|l| part_one_parse_number(l)).sum())
 }
 
-fn part_two(input: &str) -> u32 {
-    input.lines().map(|l| part_two_parse_number(l)).sum()
+const SPELLED_DIGITS: [&str; 10] = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+];
+
+fn part_two(input: &str) -> Result<u32> {
+    Ok(input.lines().map(|l| part_two_parse_number(l)).sum())
 }
 
 fn part_two_parse_number(line: &str) -> u32 {
@@ -51,11 +35,8 @@ fn parse_left_digit(line: &str) -> u32 {
         .enumerate()
         .find_map(|(idx, c)| c.to_digit(10).map(|d| (idx, d)));
 
-    let spelled_digits = vec![
-        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-    ];
-    let spelled_digit = spelled_digits
-        .into_iter()
+    let spelled_digit = SPELLED_DIGITS
+        .iter()
         .enumerate()
         .filter_map(|(numeric_value, spelled_digit)| {
             line.find(spelled_digit)
@@ -82,11 +63,8 @@ fn parse_right_digit(line: &str) -> u32 {
         .enumerate()
         .filter_map(|(idx, c)| c.to_digit(10).map(|d| (idx, d)))
         .last();
-    let spelled_digits = vec![
-        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-    ];
-    let spelled_digit = spelled_digits
-        .into_iter()
+    let spelled_digit = SPELLED_DIGITS
+        .iter()
         .enumerate()
         .filter_map(|(numeric_value, spelled_digit)| {
             line.rfind(spelled_digit)
@@ -125,12 +103,12 @@ zoneight234
 
     #[test]
     fn test_part_one() {
-        assert_eq!(part_one(PART_ONE_EXAMPLE_INPUT), 142);
+        assert_eq!(part_one(PART_ONE_EXAMPLE_INPUT).unwrap(), 142);
     }
 
     #[test]
     fn test_part_two() {
-        assert_eq!(part_two(PART_TWO_EXAMPLE_INPUT), 281);
+        assert_eq!(part_two(PART_TWO_EXAMPLE_INPUT).unwrap(), 281);
     }
 
     #[test]
@@ -167,15 +145,5 @@ zoneight234
         assert_eq!(parse_left_digit("sixfconesix6three1sixsix"), 6);
         assert_eq!(parse_right_digit("sixfconesix6three1sixsix"), 6);
         assert_eq!(part_two_parse_number("sixfconesix6three1sixsix"), 66);
-    }
-
-    // #[test]
-    fn test_part_two_real_input() {
-        let input = include_str!("../../inputs/day01.txt");
-        for line in input.lines() {
-            let n = part_two_parse_number(line);
-            println!("{line} -> {n}");
-        }
-        assert!(false);
     }
 }
