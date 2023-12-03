@@ -1,0 +1,14 @@
+use anyhow::Result;
+use aoc::runner;
+
+fn main() -> Result<()> {
+    runner(part_one, part_two)
+}
+
+fn part_one(_input: &str) -> Result<u32> {
+    todo!()
+}
+
+fn part_two(_input: &str) -> Result<u32> {
+    todo!()
+}
