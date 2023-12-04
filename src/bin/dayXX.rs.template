@@ -12,3 +12,15 @@ fn part_one(_input: &str) -> Result<u32> {
 fn part_two(_input: &str) -> Result<u32> {
     todo!()
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_part_one() -> Result<()>{
+		let input = r#""#;
+		assert_eq!(part_one(input)?, 0);
+		Ok(())
+	}
+}
