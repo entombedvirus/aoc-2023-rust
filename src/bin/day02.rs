@@ -11,6 +11,7 @@ use nom::{
 };
 
 fn main() -> Result<()> {
+    println!("heya");
     runner(part_one, part_two)
 }
 
