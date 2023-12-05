@@ -40,7 +40,6 @@ fn play_game(cards: &mut Vec<Card>) {
 
 #[derive(Debug)]
 struct Card {
-    game_no: usize,
     num_copies: usize,
     winning_numbers: HashSet<usize>,
     card_numbers: HashSet<usize>,
@@ -55,7 +54,7 @@ impl Card {
         }
 
         // Card 1: 41 48 83 86 17 | 83 86  6 31 17  9 48 53
-        let (rem, (_, _, game_no, _, _, winning_numbers, _, card_numbers)) = tuple((
+        let (rem, (_, _, _card_no, _, _, winning_numbers, _, card_numbers)) = tuple((
             tag("Card"),
             multispace1,
             number,
@@ -74,7 +73,6 @@ impl Card {
         let winning_numbers: HashSet<usize> = winning_numbers.into_iter().collect();
         let card_numbers: HashSet<usize> = card_numbers.into_iter().collect();
         Ok(Self {
-            game_no,
             num_copies: 1,
             winning_numbers,
             card_numbers,
