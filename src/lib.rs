@@ -33,3 +33,7 @@ pub fn runner<A: std::fmt::Display, B: std::fmt::Display>(
     };
     Ok(())
 }
+
+pub fn wait() {
+    let _ = std::io::stdin().read_line(&mut String::new()).unwrap();
+}
