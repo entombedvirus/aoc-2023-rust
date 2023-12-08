@@ -1,15 +1,13 @@
 #![feature(btree_cursors)]
 
 use std::{
-    collections::{
-        btree_map::Entry::{Occupied, Vacant},
-        BTreeMap,
-    },
+    collections::BTreeMap,
+    fmt::Formatter,
     ops::{Bound, Range},
 };
 
-use anyhow::Result;
-use aoc::runner;
+use anyhow::{Context, Result};
+use aoc::{runner, wait};
 use nom::{
     bytes::complete::{is_not, tag, take_while1},
     character::complete::{char, multispace1},
@@ -33,8 +31,19 @@ fn part_one(input: &str) -> Result<usize> {
         .expect("could not find min"))
 }
 
-fn part_two(_input: &str) -> Result<usize> {
-    todo!()
+fn part_two(input: &str) -> Result<usize> {
+    let alm = Almanac::parse(input)?;
+    let input = NonOverlappingRanges::from_seeds(&alm.seeds);
+    let locations = alm
+        .mappings
+        .iter()
+        .fold(input, |acc, m| acc.apply_mapping(m));
+    locations
+        .ranges
+        .keys()
+        .next()
+        .copied()
+        .context("minimum location not found")
 }
 
 type Seed = usize;
@@ -47,6 +56,17 @@ struct MappingRange {
     len: usize,
 }
 
+impl std::fmt::Display for MappingRange {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(
+            f,
+            "MappingRange({src_range:?} -> {dest_range:?})",
+            src_range = self.src_start..self.src_start + self.len,
+            dest_range = self.dest_start..self.dest_start + self.len
+        )
+    }
+}
+
 impl MappingRange {
     fn lookup(&self, index: usize) -> Option<usize> {
         if index >= self.src_start && index < self.src_start + self.len {
@@ -57,39 +77,46 @@ impl MappingRange {
         }
     }
 
-    fn lookup_range(&self, input: Range<usize>) -> Vec<(usize, usize)> {
+    fn lookup_range(
+        &self,
+        input: Range<usize>,
+    ) -> (
+        Option<Range<usize>>,
+        Option<Range<usize>>,
+        Option<Range<usize>>,
+    ) {
+        let mut prefix = None;
+        let mut middle = None;
+        let mut suffix = None;
         let src_range = self.src_start..self.src_start + self.len;
-        if input.end <= src_range.start || input.start >= src_range.end {
-            vec![(input.start, input.end)]
+        if input.end <= src_range.start {
+            prefix = Some(input);
+        } else if input.start >= src_range.end {
+            suffix = Some(input);
         } else if input.start < self.src_start && input.end <= src_range.end {
             let overlap = input.end - self.src_start;
-            vec![
-                (input.start, self.src_start),
-                (self.dest_start, self.dest_start + overlap),
-            ]
+            prefix = Some(input.start..self.src_start);
+            middle = Some(self.dest_start..self.dest_start + overlap);
         } else if input.start >= src_range.start && input.end <= src_range.end {
             let offset = input.start - self.src_start;
             let overlap = input.end - input.start;
-            vec![(self.dest_start + offset, self.dest_start + offset + overlap)]
+            middle = Some(self.dest_start + offset..self.dest_start + offset + overlap);
         } else if input.start >= src_range.start
             && input.start < src_range.end
             && input.end >= src_range.end
         {
             let offset = input.start - self.src_start;
             let overlap = src_range.end - input.start;
-            vec![
-                (self.dest_start + offset, self.dest_start + offset + overlap),
-                (input.start + overlap, input.end),
-            ]
+            middle = Some(self.dest_start + offset..self.dest_start + offset + overlap);
+            suffix = Some(input.start + overlap..input.end);
         } else if input.start < src_range.start && input.end >= src_range.end {
-            vec![
-                (input.start, self.src_start),
-                (self.dest_start, self.dest_start + self.len),
-                (src_range.end, input.end),
-            ]
+            prefix = Some(input.start..self.src_start);
+            middle = Some(self.dest_start..self.dest_start + self.len);
+            suffix = Some(src_range.end..input.end);
         } else {
             unreachable!()
         }
+        (prefix, middle, suffix)
     }
 }
 
@@ -100,6 +127,20 @@ struct Mapping {
     ranges: Vec<MappingRange>,
 }
 
+impl std::fmt::Display for Mapping {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(
+            f,
+            "{name}{ranges:?}",
+            name = self.name,
+            ranges = self
+                .ranges
+                .iter()
+                .map(|r| r.to_string())
+                .collect::<Vec<_>>()
+        )
+    }
+}
 impl Mapping {
     fn lookup(&self, index: usize) -> usize {
         self.ranges
@@ -172,12 +213,7 @@ struct NonOverlappingRanges {
 }
 
 impl NonOverlappingRanges {
-    fn from_seeds(seed_ranges: &[usize]) -> Self {
-        let mut ranges: BTreeMap<usize, usize> = seed_ranges
-            .chunks_exact(2)
-            .map(|sl| (sl[0], sl[1]))
-            .map(|(start, len)| (start, start + len))
-            .collect();
+    fn new(mut ranges: BTreeMap<usize, usize>) -> Self {
         let mut cur = ranges.lower_bound_mut(Bound::Unbounded);
         while let Some(current_range) = cur.key_value_mut().map(|(cstart, cend)| *cstart..*cend) {
             // cursor is guaranteed to be less than nstart due to btree ordering
@@ -202,27 +238,71 @@ impl NonOverlappingRanges {
                 cur.move_next();
             }
         }
-
         Self { ranges }
     }
 
+    fn from_seeds(seed_ranges: &[usize]) -> Self {
+        let ranges: BTreeMap<usize, usize> = seed_ranges
+            .chunks_exact(2)
+            .map(|sl| (sl[0], sl[1]))
+            .map(|(start, len)| (start, start + len))
+            .collect();
+        Self::new(ranges)
+    }
+
     fn apply_mapping(&self, mapping: &Mapping) -> Self {
+        eprintln!("apply_mapping: self: {self:?}, mapping: {mapping}");
         let lookup: BTreeMap<usize, &MappingRange> =
             mapping.ranges.iter().map(|x| (x.src_start, x)).collect();
-        let mapped_ranges: BTreeMap<usize, usize> = self
+        let do_lookup = |(mut istart, mut iend): (usize, usize)| {
+            let mut mapped_result = Vec::new();
+            // let mut cursor = lookup.upper_bound(Bound::Included(&iend));
+            let mut cursor = lookup.lower_bound(Bound::Unbounded);
+            loop {
+                match cursor.value() {
+                    Some(mr) => {
+                        eprintln!(
+                            "apply_mapping: (istart..iend): {:?}, mr: {mr}",
+                            (istart..iend)
+                        );
+                        let (prefix, middle, suffix) = dbg!(mr.lookup_range(istart..iend));
+                        // wait();
+                        prefix.map(|p| mapped_result.push((p.start, p.end)));
+                        middle.map(|p| mapped_result.push((p.start, p.end)));
+                        if let Some(r) = suffix {
+                            istart = r.start;
+                            iend = r.end;
+                            cursor.move_next();
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                    None => {
+                        mapped_result.push((istart, iend));
+                        break;
+                    }
+                };
+            }
+            mapped_result
+        };
+        let mapped_ranges = self
             .ranges
             .iter()
-            .flat_map(|(istart, iend)| {
-                let cursor = lookup.upper_bound(Bound::Included(istart));
-                match cursor.value() {
-                    Some(mr) => mr.lookup_range(*istart..*iend).into_iter(),
-                    None => vec![(*istart, *iend)].into_iter(),
-                }
-            })
-            .collect();
-        Self {
-            ranges: mapped_ranges,
+            .flat_map(|(istart, iend)| do_lookup((*istart, *iend)).into_iter());
+        let mut ranges = BTreeMap::new();
+        for (istart, iend) in mapped_ranges {
+            let slot = ranges.entry(istart).or_insert(iend);
+            *slot = iend.max(*slot);
         }
+        let res = Self::new(ranges);
+        eprintln!(
+            "lookup: {mapping}\ninput: {:?}\nmapped_ranges: {:?}",
+            &self.ranges, &res.ranges,
+        );
+        // wait();
+
+        res
     }
 }
 
@@ -276,6 +356,12 @@ humidity-to-location map:
     }
 
     #[test]
+    fn test_part_two() -> Result<()> {
+        assert_eq!(part_two(INPUT)?, 46);
+        Ok(())
+    }
+
+    #[test]
     fn test_non_overlapping_ranges() {
         let mut rs = NonOverlappingRanges::from_seeds(&vec![1, 10, 15, 5]);
         assert_eq!(rs.ranges.pop_first(), Some((1, 11)));
@@ -306,21 +392,33 @@ humidity-to-location map:
             src_start: 5,
             len: 10,
         };
-        assert_eq!(lookup.lookup_range(1..5), vec![(1, 5)]);
-        assert_eq!(lookup.lookup_range(15..20), vec![(15, 20)]);
+        assert_eq!(lookup.lookup_range(1..5), (Some(1..5), None, None));
+        assert_eq!(lookup.lookup_range(15..20), (None, None, Some(15..20)));
 
-        assert_eq!(lookup.lookup_range(1..6), vec![(1, 5), (100, 101)]);
-        assert_eq!(lookup.lookup_range(1..15), vec![(1, 5), (100, 110)]);
+        assert_eq!(
+            lookup.lookup_range(1..6),
+            (Some(1..5), Some(100..101), None)
+        );
+        assert_eq!(
+            lookup.lookup_range(1..15),
+            (Some(1..5), Some(100..110), None)
+        );
 
-        assert_eq!(lookup.lookup_range(5..15), vec![(100, 110)]);
-        assert_eq!(lookup.lookup_range(6..14), vec![(101, 109)]);
+        assert_eq!(lookup.lookup_range(5..15), (None, Some(100..110), None));
+        assert_eq!(lookup.lookup_range(6..14), (None, Some(101..109), None));
 
-        assert_eq!(lookup.lookup_range(14..16), vec![(109, 110), (15, 16)]);
-        assert_eq!(lookup.lookup_range(13..17), vec![(108, 110), (15, 17)]);
+        assert_eq!(
+            lookup.lookup_range(14..16),
+            (None, Some(109..110), Some(15..16))
+        );
+        assert_eq!(
+            lookup.lookup_range(13..17),
+            (None, Some(108..110), Some(15..17))
+        );
 
         assert_eq!(
             lookup.lookup_range(1..17),
-            vec![(1, 5), (100, 110), (15, 17)]
+            (Some(1..5), Some(100..110), Some(15..17))
         );
     }
 }
