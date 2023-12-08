@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use aoc::{runner, wait};
+use aoc::runner;
 use nom::{
     bytes::complete::{is_not, tag, take_while1},
     character::complete::{char, multispace1},
@@ -34,16 +34,12 @@ fn part_one(input: &str) -> Result<usize> {
 fn part_two(input: &str) -> Result<usize> {
     let alm = Almanac::parse(input)?;
     let input = NonOverlappingRanges::from_seeds(&alm.seeds);
-    let locations = alm
-        .mappings
-        .iter()
-        .fold(input, |acc, m| acc.apply_mapping(m));
-    locations
+    Ok(input
         .ranges
-        .keys()
-        .next()
-        .copied()
-        .context("minimum location not found")
+        .into_iter()
+        .map(|(start, end)| alm.min_location_for(start..end))
+        .min()
+        .context("minimum location not found")?)
 }
 
 type Seed = usize;
@@ -124,7 +120,7 @@ impl MappingRange {
 #[derive(Debug)]
 struct Mapping {
     name: String,
-    ranges: Vec<MappingRange>,
+    ranges: BTreeMap<usize, MappingRange>,
 }
 
 impl std::fmt::Display for Mapping {
@@ -133,11 +129,7 @@ impl std::fmt::Display for Mapping {
             f,
             "{name}{ranges:?}",
             name = self.name,
-            ranges = self
-                .ranges
-                .iter()
-                .map(|r| r.to_string())
-                .collect::<Vec<_>>()
+            ranges = self.ranges
         )
     }
 }
@@ -145,7 +137,7 @@ impl Mapping {
     fn lookup(&self, index: usize) -> usize {
         self.ranges
             .iter()
-            .find_map(|r| r.lookup(index))
+            .find_map(|(_, r)| r.lookup(index))
             .unwrap_or(index)
     }
 }
@@ -177,7 +169,7 @@ impl Almanac {
             tuple((is_not(" "), tag(" map:\n"), parse_ranges)),
             |(name, _, ranges)| Mapping {
                 name: name.to_string(),
-                ranges,
+                ranges: ranges.into_iter().map(|x| (x.src_start, x)).collect(),
             },
         );
         let parse_mappings = separated_list1(tag("\n\n"), parse_mapping);
@@ -202,6 +194,20 @@ impl Almanac {
 
     fn location(&self, seed: Seed) -> Loc {
         self.mappings.iter().fold(seed, |acc, m| m.lookup(acc))
+    }
+
+    fn min_location_for(&self, seed_range: Range<Seed>) -> Loc {
+        let locs = self
+            .mappings
+            .iter()
+            .fold(NonOverlappingRanges::single(seed_range), |inputs, m| {
+                inputs.apply_mapping(m)
+            });
+        locs.ranges
+            .keys()
+            .next()
+            .copied()
+            .expect("min_locatation_for failed to find location")
     }
 }
 
@@ -251,58 +257,45 @@ impl NonOverlappingRanges {
     }
 
     fn apply_mapping(&self, mapping: &Mapping) -> Self {
-        eprintln!("apply_mapping: self: {self:?}, mapping: {mapping}");
-        let lookup: BTreeMap<usize, &MappingRange> =
-            mapping.ranges.iter().map(|x| (x.src_start, x)).collect();
-        let do_lookup = |(mut istart, mut iend): (usize, usize)| {
+        let do_lookup = |mut input_range: Range<usize>| {
             let mut mapped_result = Vec::new();
-            // let mut cursor = lookup.upper_bound(Bound::Included(&iend));
-            let mut cursor = lookup.lower_bound(Bound::Unbounded);
-            loop {
-                match cursor.value() {
-                    Some(mr) => {
-                        eprintln!(
-                            "apply_mapping: (istart..iend): {:?}, mr: {mr}",
-                            (istart..iend)
-                        );
-                        let (prefix, middle, suffix) = dbg!(mr.lookup_range(istart..iend));
-                        // wait();
-                        prefix.map(|p| mapped_result.push((p.start, p.end)));
-                        middle.map(|p| mapped_result.push((p.start, p.end)));
-                        if let Some(r) = suffix {
-                            istart = r.start;
-                            iend = r.end;
-                            cursor.move_next();
-                            continue;
-                        } else {
-                            break;
-                        }
-                    }
-                    None => {
-                        mapped_result.push((istart, iend));
-                        break;
-                    }
-                };
+            for (_, mr) in mapping.ranges.iter() {
+                let (prefix, middle, suffix) = mr.lookup_range(input_range.clone());
+                prefix.map(|p| mapped_result.push((p.start, p.end)));
+                middle.map(|p| mapped_result.push((p.start, p.end)));
+                if let Some(r) = suffix {
+                    input_range = r.start..r.end;
+                    continue;
+                } else {
+                    input_range = 0..0;
+                    break;
+                }
             }
+            if input_range.len() != 0 {
+                mapped_result.push((input_range.start, input_range.end));
+            }
+
             mapped_result
         };
-        let mapped_ranges = self
-            .ranges
+        self.ranges
             .iter()
-            .flat_map(|(istart, iend)| do_lookup((*istart, *iend)).into_iter());
+            .flat_map(|(istart, iend)| do_lookup(*istart..*iend).into_iter())
+            .collect()
+    }
+
+    fn single(seed_range: Range<usize>) -> Self {
+        Self::from_iter(std::iter::once((seed_range.start, seed_range.end)))
+    }
+}
+
+impl FromIterator<(usize, usize)> for NonOverlappingRanges {
+    fn from_iter<T: IntoIterator<Item = (usize, usize)>>(iter: T) -> Self {
         let mut ranges = BTreeMap::new();
-        for (istart, iend) in mapped_ranges {
+        for (istart, iend) in iter {
             let slot = ranges.entry(istart).or_insert(iend);
             *slot = iend.max(*slot);
         }
-        let res = Self::new(ranges);
-        eprintln!(
-            "lookup: {mapping}\ninput: {:?}\nmapped_ranges: {:?}",
-            &self.ranges, &res.ranges,
-        );
-        // wait();
-
-        res
+        Self::new(ranges)
     }
 }
 
