@@ -44,6 +44,9 @@ where
 {
     let (rem, out) = parser(input)
         .map_err(|err: nom::Err<nom::error::Error<&str>>| anyhow::format_err!("{}", err))?;
-    anyhow::ensure!(rem.is_empty(), "parsing terminated early: {rem}");
+    anyhow::ensure!(
+        rem.is_empty() || rem == "\n",
+        "parsing terminated early: {rem}"
+    );
     Ok(out)
 }
