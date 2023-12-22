@@ -1,7 +1,13 @@
 #![allow(unused, dead_code)]
 
+use std::{
+    borrow::BorrowMut,
+    cell::RefCell,
+    collections::{hash_map::Entry, HashMap},
+};
+
 use anyhow::Result;
-use aoc::{must_parse, runner};
+use aoc::{must_parse, runner, wait};
 use nom::{
     branch::alt,
     bytes::complete::is_not,
@@ -20,12 +26,18 @@ fn part_one(input: &str) -> Result<usize> {
     Ok(puzzle
         .lines
         .iter()
-        .map(|line| line.possibilities().count())
+        // .map(|line| line.possibilities().count())
+        .map(|line| line.num_possibilities())
         .sum())
 }
 
-fn part_two(_input: &str) -> Result<u32> {
-    todo!()
+fn part_two(input: &str) -> Result<usize> {
+    let puzzle = Puzzle::parse(input)?;
+    Ok(puzzle
+        .lines
+        .iter()
+        .map(|line| line.unfold().num_possibilities())
+        .sum())
 }
 
 #[derive(Debug)]
@@ -98,6 +110,66 @@ impl PuzzleLine {
                 String::from_utf8(chars).expect("always ascii")
             })
             .filter(|line| Self::is_valid(&line, &self.groups))
+    }
+
+    fn num_possibilities(&self) -> usize {
+        let cache = RefCell::new(HashMap::new());
+        count_num_possibilities(&self.springs, &self.groups, &cache)
+    }
+
+    fn unfold(&self) -> Self {
+        let springs = [self.springs.as_str()].repeat(5).join("?");
+        let groups = self.groups.repeat(5);
+        Self { springs, groups }
+    }
+}
+
+fn count_num_possibilities<'a>(
+    springs: &str,
+    groups: &'a [u8],
+    cache: &RefCell<HashMap<(String, &'a [u8]), usize>>,
+) -> usize {
+    let springs = springs.trim_matches('.');
+
+    // base cases that do not need recursion
+    if springs.is_empty() && groups.is_empty() {
+        return 1;
+    } else if groups.is_empty() {
+        // dots or questions only are okay
+        return if !springs.contains('#') { 1 } else { 0 };
+    } else if !springs.contains('?') {
+        return if PuzzleLine::is_valid(springs, groups) {
+            1
+        } else {
+            0
+        };
+    }
+
+    let (first, rest) = springs.split_once('.').unwrap_or((springs, ""));
+    match first.find('?') {
+        None => {
+            let (gfirst, grest) = groups.split_at(1);
+            if PuzzleLine::is_valid(first, gfirst) {
+                count_num_possibilities(rest, grest, cache)
+            } else {
+                0
+            }
+        }
+        Some(idx) => {
+            let key = (springs.to_owned(), groups);
+            let cache_value = cache.borrow().get(&key).copied();
+            if let Some(v) = cache_value {
+                v
+            } else {
+                let mut replaced = springs.to_string();
+                replaced.replace_range(idx..idx + 1, "#");
+                let c1 = count_num_possibilities(&replaced, groups, cache);
+                replaced.replace_range(idx..idx + 1, ".");
+                let c2 = count_num_possibilities(&replaced, groups, cache);
+                cache.borrow_mut().insert(key, c1 + c2);
+                c1 + c2
+            }
+        }
     }
 }
 
