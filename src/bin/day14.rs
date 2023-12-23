@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
-use aoc::{must_parse, runner, wait};
+use anyhow::Result;
+use aoc::{must_parse, runner};
 use nom::{
     bytes::complete::is_a, character::complete::newline, combinator::map, multi::separated_list1,
 };
@@ -283,9 +283,12 @@ O.#..O.#.#
 #.OOO#...O"#,
         ];
 
-        assert_eq!(p.tilt_cycle(), Puzzle::parse(expected[0])?);
-        assert_eq!(p.tilt_cycle(), Puzzle::parse(expected[1])?);
-        assert_eq!(p.tilt_cycle(), Puzzle::parse(expected[2])?);
+        let p = p.tilt_cycle();
+        assert_eq!(p, Puzzle::parse(expected[0])?);
+        let p = p.tilt_cycle();
+        assert_eq!(p, Puzzle::parse(expected[1])?);
+        let p = p.tilt_cycle();
+        assert_eq!(p, Puzzle::parse(expected[2])?);
         Ok(())
     }
 
