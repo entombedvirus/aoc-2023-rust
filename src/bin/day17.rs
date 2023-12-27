@@ -37,56 +37,64 @@ impl Puzzle {
         min_step: u8,
         max_step: u8,
     ) -> Option<u32> {
-        let mut queue = BinaryHeap::new();
-        let mut seen = BTreeSet::new();
+        let h = |(r, c): (Row, Col)| (r.abs_diff(goal.0) + c.abs_diff(goal.1)) as u32;
 
-        queue.push(Reverse(Node {
-            cost: 0,
-            pos: start,
-            dir: Direction::Right,
-            num_steps: 0,
-        }));
-        queue.push(Reverse(Node {
-            cost: 0,
-            pos: start,
-            dir: Direction::Down,
-            num_steps: 0,
-        }));
+        let mut f = BinaryHeap::new();
+        let mut g = BTreeMap::new();
 
-        while let Some(Reverse(current)) = queue.pop() {
-            if current.pos == goal {
-                return Some(current.cost);
+        for dir in [Direction::Right, Direction::Down] {
+            let start = Node {
+                cost: h(start),
+                pos: start,
+                dir,
+                num_steps: 0,
+            };
+            g.insert(start.key(), 0u32);
+            f.push(Reverse(start))
+        }
+
+        while let Some(Reverse(q)) = f.pop() {
+            if q.pos == goal {
+                return g.get(&q.key()).copied();
             }
 
-            for (ndir, nr, nc) in self.neighbor(current.pos) {
-                if ndir == !current.dir {
-                    // can't go back the way we came
+            for (nd, nr, nc) in self.neighbor(q.pos) {
+                if nd == !q.dir {
+                    // can't go backwards
                     continue;
                 }
-                let num_steps = if ndir == current.dir {
-                    current.num_steps + 1
-                } else if current.num_steps >= min_step {
+                let num_steps = if nd == q.dir {
+                    if q.num_steps < max_step {
+                        // can go straight
+                        q.num_steps + 1
+                    } else {
+                        // can't go straight
+                        continue;
+                    }
+                } else if q.num_steps >= min_step {
+                    // can turn, reset the counter
                     1
                 } else {
+                    // can't turn yet
                     continue;
                 };
-                if num_steps > max_step {
-                    continue;
-                }
-                let neighbor_node = Node {
-                    cost: current.cost + (self[(nr, nc)] - b'0') as u32,
+                let mut neighbor_node = Node {
+                    cost: g[&q.key()] + (self[(nr, nc)] - b'0') as u32,
                     pos: (nr, nc),
-                    dir: ndir,
+                    dir: nd,
                     num_steps,
                 };
-                let key = neighbor_node.key();
-                if !seen.contains(&key) {
-                    queue.push(Reverse(neighbor_node));
-                    seen.insert(key);
+                if let Some(prev_cost) = g.get(&neighbor_node.key()) {
+                    if *prev_cost <= neighbor_node.cost {
+                        continue;
+                    }
                 }
+                g.insert(neighbor_node.key(), neighbor_node.cost);
+                neighbor_node.cost += h(neighbor_node.pos);
+                f.push(Reverse(neighbor_node));
             }
         }
-        None
+        Some(0)
     }
 
     fn neighbor(&self, (row, col): (usize, usize)) -> Vec<(Direction, usize, usize)> {
