@@ -1,15 +1,10 @@
-#![allow(unused, dead_code)]
-
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
 use anyhow::{Context, Result};
-use aoc::{runner, wait};
-
-// 3 blocks means one less direction
-const MAX_SAME_DIRS: u8 = 3;
+use aoc::runner;
 
 fn main() -> Result<()> {
     runner(part_one, part_two)
@@ -17,12 +12,14 @@ fn main() -> Result<()> {
 
 fn part_one(input: &str) -> Result<u32> {
     let p: Puzzle = input.parse()?;
-    p.a_star((0, 0), (p.num_rows - 1, p.num_cols - 1))
+    p.a_star((0, 0), (p.num_rows - 1, p.num_cols - 1), 1, 3)
         .context("path to goal not found")
 }
 
-fn part_two(_input: &str) -> Result<u32> {
-    todo!()
+fn part_two(input: &str) -> Result<u32> {
+    let p: Puzzle = input.parse()?;
+    p.a_star((0, 0), (p.num_rows - 1, p.num_cols - 1), 4, 10)
+        .context("path to goal not found")
 }
 
 #[derive(Debug)]
@@ -33,21 +30,25 @@ struct Puzzle {
 }
 
 impl Puzzle {
-    fn a_star(&self, start: (Row, Col), goal: (Row, Col)) -> Option<u32> {
-        let h = |r: Row, c: Col| (r.abs_diff(goal.0) + c.abs_diff(goal.1)) as u32;
-
+    fn a_star(
+        &self,
+        start: (Row, Col),
+        goal: (Row, Col),
+        min_step: u8,
+        max_step: u8,
+    ) -> Option<u32> {
         let mut queue = BinaryHeap::new();
         let mut seen = BTreeSet::new();
 
         queue.push(Reverse(Node {
             cost: 0,
-            pos: (0, 0),
+            pos: start,
             dir: Direction::Right,
             num_steps: 0,
         }));
         queue.push(Reverse(Node {
             cost: 0,
-            pos: (0, 0),
+            pos: start,
             dir: Direction::Down,
             num_steps: 0,
         }));
@@ -57,12 +58,6 @@ impl Puzzle {
                 return Some(current.cost);
             }
 
-            let key = current.key();
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
-
             for (ndir, nr, nc) in self.neighbor(current.pos) {
                 if ndir == !current.dir {
                     // can't go back the way we came
@@ -70,10 +65,12 @@ impl Puzzle {
                 }
                 let num_steps = if ndir == current.dir {
                     current.num_steps + 1
-                } else {
+                } else if current.num_steps >= min_step {
                     1
+                } else {
+                    continue;
                 };
-                if num_steps > MAX_SAME_DIRS {
+                if num_steps > max_step {
                     continue;
                 }
                 let neighbor_node = Node {
@@ -82,10 +79,12 @@ impl Puzzle {
                     dir: ndir,
                     num_steps,
                 };
-                queue.push(Reverse(neighbor_node));
+                let key = neighbor_node.key();
+                if !seen.contains(&key) {
+                    queue.push(Reverse(neighbor_node));
+                    seen.insert(key);
+                }
             }
-            // println!("{}", AstarState(self, &queue, &seen));
-            // wait();
         }
         None
     }
@@ -233,34 +232,6 @@ impl<'a> std::fmt::Display for AstarState<'a> {
         }
         Ok(())
     }
-    // fn print(&self, num_rows: usize, num_cols: usize, h: impl Fn((Row, Col)) -> usize) {
-    //     let open_set = self.1;
-    //     for r in 0..num_rows {
-    //         for c in 0..num_cols {
-    //             let pos = (r, c);
-    //             let mut prev_dir = self
-    //                 .2
-    //                 .get(&pos)
-    //                 .map(|dirs| {
-    //                     let mut buf = String::new();
-    //                     if let Some(d) = dirs.back() {
-    //                         buf.push_str(&format!("{}", d));
-    //                     }
-    //                     buf
-    //                 })
-    //                 .unwrap_or("".into());
-    //             prev_dir.push_str(&match open_set.iter().find(|x| x.pos == pos) {
-    //                 Some(n) => format!("{}* ", n.est_cost),
-    //                 None => match self.0.get(&pos) {
-    //                     Some(c) => format!("{c} "),
-    //                     None => format!("{}** ", h(pos)),
-    //                 },
-    //             });
-    //             print!("{prev_dir:>7} ");
-    //         }
-    //         println!();
-    //     }
-    // }
 }
 
 #[cfg(test)]
@@ -284,6 +255,12 @@ mod tests {
     #[test]
     fn test_part_one() -> Result<()> {
         assert_eq!(part_one(INPUT)?, 102);
+        Ok(())
+    }
+
+    #[test]
+    fn test_part_two() -> Result<()> {
+        assert_eq!(part_two(INPUT)?, 94);
         Ok(())
     }
 
