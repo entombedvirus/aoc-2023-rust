@@ -1,20 +1,24 @@
 #![allow(unused, dead_code)]
 
-use std::collections::{BTreeMap, BinaryHeap, VecDeque};
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
+};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use aoc::{runner, wait};
 
 // 3 blocks means one less direction
-const MAX_SAME_DIRS: usize = 3;
+const MAX_SAME_DIRS: u8 = 3;
 
 fn main() -> Result<()> {
     runner(part_one, part_two)
 }
 
-fn part_one(input: &str) -> Result<usize> {
+fn part_one(input: &str) -> Result<u32> {
     let p: Puzzle = input.parse()?;
-    Ok(p.a_star((0, 0), (p.num_rows - 1, p.num_cols - 1)))
+    p.a_star((0, 0), (p.num_rows - 1, p.num_cols - 1))
+        .context("path to goal not found")
 }
 
 fn part_two(_input: &str) -> Result<u32> {
@@ -29,133 +33,61 @@ struct Puzzle {
 }
 
 impl Puzzle {
-    fn a_star(&self, start: (usize, usize), goal: (usize, usize)) -> usize {
-        // heuristic for estimating distance between passed in node and dest
-        // here, I am using the Manhattan Distance between the two nodes
-        let h = |(r, c): (usize, usize)| r.abs_diff(goal.0) + c.abs_diff(goal.1);
+    fn a_star(&self, start: (Row, Col), goal: (Row, Col)) -> Option<u32> {
+        let h = |r: Row, c: Col| (r.abs_diff(goal.0) + c.abs_diff(goal.1)) as u32;
 
-        let start_node = Node {
-            pos: start,
-            est_cost: h(start),
-            last_dir: Direction::Right,
-            moves_left: MAX_SAME_DIRS as u8,
-        };
-        // The set of discovered nodes that may need to be (re-)expanded.
-        // Initially, only the start node is known.
-        let mut open_set = BinaryHeap::new();
-        open_set.push(start_node.clone());
+        let mut queue = BinaryHeap::new();
+        let mut seen = BTreeSet::new();
 
-        // For node n, costs[n] is the cost of the cheapest path from start to n currently known.
-        let mut costs = BTreeMap::new();
-        costs.insert(start_node.clone(), 0);
+        queue.push(Reverse(Node {
+            cost: 0,
+            pos: (0, 0),
+            dir: Direction::Right,
+            num_steps: 0,
+        }));
+        queue.push(Reverse(Node {
+            cost: 0,
+            pos: (0, 0),
+            dir: Direction::Down,
+            num_steps: 0,
+        }));
 
-        // For node n, parent[n.pos] is the previous node in the optimal path from start to goal
-        let mut parent = BTreeMap::new();
+        while let Some(Reverse(current)) = queue.pop() {
+            if current.pos == goal {
+                return Some(current.cost);
+            }
 
-        while let Some(current) = open_set.pop() {
-            for (dir, nr, nc) in self.neighbor(current.pos) {
-                // can't go straight for too long
-                let is_allowed = |src: &Node, new_dir: Direction, neighbor: (Row, Col)| {
-                    if parent.get(src) == Some(&neighbor) {
-                        false
-                    } else {
-                        !(src.last_dir == new_dir && src.moves_left == 0)
-                        // let dirs = &prev_dirs[&src];
-                        // dirs.len() < MAX_SAME_DIRS
-                        //     || dirs
-                        //         .range(dirs.len() - MAX_SAME_DIRS..)
-                        //         .any(|d| d != &new_dir)
-                    }
-                };
+            let key = current.key();
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.insert(key);
 
-                let n = (nr, nc);
-                if !is_allowed(&current, dir, n) {
-                    // can't consider this neighbor because we have already used up the at-most 3
-                    // blocks rule slots
+            for (ndir, nr, nc) in self.neighbor(current.pos) {
+                if ndir == !current.dir {
+                    // can't go back the way we came
                     continue;
                 }
-                let tenatative = costs[&current] + (self[n] - b'0') as usize;
-                let mut cost_updated = false;
-                let neighbor_node = Node {
-                    pos: n,
-                    est_cost: tenatative + h(n),
-                    last_dir: dir,
-                    moves_left: if current.last_dir == dir {
-                        current.moves_left - 1
-                    } else {
-                        3
-                    },
+                let num_steps = if ndir == current.dir {
+                    current.num_steps + 1
+                } else {
+                    1
                 };
-                costs
-                    .entry(neighbor_node.clone())
-                    .and_modify(|prev_cost| {
-                        if tenatative < *prev_cost {
-                            cost_updated = true;
-                            *prev_cost = tenatative;
-                        }
-                    })
-                    .or_insert_with(|| {
-                        cost_updated = true;
-                        tenatative
-                    });
-                if cost_updated {
-                    if open_set
-                        .iter()
-                        .find(|n| n.is_matching(&neighbor_node))
-                        .is_some()
-                    {
-                        open_set = open_set
-                            .into_iter()
-                            .map(|mut node| {
-                                if node.is_matching(&neighbor_node) {
-                                    node.est_cost = neighbor_node.est_cost;
-                                }
-                                node
-                            })
-                            .collect()
-                    } else {
-                        open_set.push(neighbor_node.clone());
-                    }
-                    parent.insert(neighbor_node, current.pos);
+                if num_steps > MAX_SAME_DIRS {
+                    continue;
                 }
+                let neighbor_node = Node {
+                    cost: current.cost + (self[(nr, nc)] - b'0') as u32,
+                    pos: (nr, nc),
+                    dir: ndir,
+                    num_steps,
+                };
+                queue.push(Reverse(neighbor_node));
             }
-            // Costs(&costs, &open_set, &prev_dirs).print(self.num_rows, self.num_cols, h);
+            // println!("{}", AstarState(self, &queue, &seen));
             // wait();
         }
-
-        // reconstruct path
-        let find_min_node = |pos: (Row, Col)| {
-            costs
-                .iter()
-                .filter(|(node, cost)| node.pos == pos)
-                .min_by_key(|(_, cost)| **cost)
-        };
-
-        let (goal_node, goal_cost) = find_min_node(goal).unwrap();
-        let mut optimal_path = BTreeMap::new();
-        optimal_path.insert(goal, goal_node.last_dir);
-        let mut c = goal_node;
-        while let Some(prev) = parent.get(c).copied() {
-            if let Some(prev_node) = find_min_node(prev).map(|(node, _)| node) {
-                optimal_path.insert(prev, prev_node.last_dir);
-                c = prev_node;
-            } else {
-                break;
-            }
-        }
-
-        // print puzzle with path
-        for row in 0..self.num_rows {
-            for col in 0..self.num_cols {
-                if let Some(d) = optimal_path.get(&(row, col)) {
-                    print!("{}", d);
-                } else {
-                    print!("{}", self[(row, col)] as char);
-                }
-            }
-            println!();
-        }
-        return *goal_cost;
+        None
     }
 
     fn neighbor(&self, (row, col): (usize, usize)) -> Vec<(Direction, usize, usize)> {
@@ -212,50 +144,17 @@ impl std::ops::IndexMut<(usize, usize)> for Puzzle {
     }
 }
 
-#[derive(Debug, Eq, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Node {
-    pos: (usize, usize),
-    last_dir: Direction,
-    moves_left: u8,
-    est_cost: usize,
+    cost: u32,
+    pos: (Row, Col),
+    dir: Direction,
+    num_steps: u8,
 }
 
-impl PartialEq for Node {
-    fn eq(&self, other: &Self) -> bool {
-        self.pos == other.pos
-            && self.last_dir == other.last_dir
-            && self.moves_left == other.moves_left
-        // no est cost
-    }
-}
-
-impl std::hash::Hash for Node {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.pos.hash(state);
-        self.last_dir.hash(state);
-        self.moves_left.hash(state);
-        // no est_cost
-    }
-}
 impl Node {
-    fn is_matching(&self, neighbor_node: &Node) -> bool {
-        self.pos == neighbor_node.pos
-            && self.last_dir == neighbor_node.last_dir
-            && self.moves_left == neighbor_node.moves_left
-    }
-}
-
-impl std::cmp::PartialOrd for Node {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl std::cmp::Ord for Node {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let a = (self.est_cost, self.pos, self.moves_left, self.last_dir);
-        let b = (other.est_cost, other.pos, other.moves_left, self.last_dir);
-        b.cmp(&a)
+    fn key(&self) -> ((Row, Col), Direction, u8) {
+        (self.pos, self.dir, self.num_steps)
     }
 }
 
@@ -265,6 +164,19 @@ enum Direction {
     Down,
     Left,
     Right,
+}
+
+impl std::ops::Not for Direction {
+    type Output = Self;
+    fn not(self) -> Self::Output {
+        use Direction::*;
+        match self {
+            Up => Down,
+            Down => Up,
+            Left => Right,
+            Right => Left,
+        }
+    }
 }
 
 impl std::fmt::Display for Direction {
@@ -283,41 +195,72 @@ type Row = usize;
 type Col = usize;
 
 #[derive(Debug)]
-struct Costs<'a>(
-    &'a BTreeMap<(Row, Col), usize>,
-    &'a BinaryHeap<Node>,
-    &'a BTreeMap<(Row, Col), VecDeque<Direction>>,
+struct AstarState<'a>(
+    &'a Puzzle,
+    &'a BinaryHeap<Reverse<Node>>,
+    &'a BTreeSet<((Row, Col), Direction, u8)>,
 );
 
-impl<'a> Costs<'a> {
-    fn print(&self, num_rows: usize, num_cols: usize, h: impl Fn((Row, Col)) -> usize) {
-        let open_set = self.1;
-        for r in 0..num_rows {
-            for c in 0..num_cols {
-                let pos = (r, c);
-                let mut prev_dir = self
-                    .2
-                    .get(&pos)
-                    .map(|dirs| {
-                        let mut buf = String::new();
-                        if let Some(d) = dirs.back() {
-                            buf.push_str(&format!("{}", d));
-                        }
-                        buf
-                    })
-                    .unwrap_or("".into());
-                prev_dir.push_str(&match open_set.iter().find(|x| x.pos == pos) {
-                    Some(n) => format!("{}* ", n.est_cost),
-                    None => match self.0.get(&pos) {
-                        Some(c) => format!("{c} "),
-                        None => format!("{}** ", h(pos)),
-                    },
+impl<'a> std::fmt::Display for AstarState<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let &Self(puzzle, queue, seen) = self;
+        let queue_nodes: BTreeMap<(Row, Col), Vec<&Node>> =
+            queue
+                .iter()
+                .fold(BTreeMap::new(), |mut acc, Reverse(node)| {
+                    acc.entry(node.pos)
+                        .and_modify(|nodes| nodes.push(node))
+                        .or_insert(vec![node]);
+                    acc
                 });
-                print!("{prev_dir:>7} ");
+        for r in 0..puzzle.num_rows {
+            for c in 0..puzzle.num_cols {
+                if let Some(nodes) = queue_nodes.get(&(r, c)) {
+                    write!(f, "[")?;
+                    for n in nodes {
+                        let key = n.key();
+                        write!(f, "<{:<2},{},{:1}> ", n.cost, n.dir, n.num_steps)?;
+                        if seen.contains(&key) {
+                            write!(f, "*")?;
+                        }
+                    }
+                    write!(f, "]")?;
+                } else {
+                    write!(f, "{:8} ", "x")?;
+                }
             }
-            println!();
+            writeln!(f)?;
         }
+        Ok(())
     }
+    // fn print(&self, num_rows: usize, num_cols: usize, h: impl Fn((Row, Col)) -> usize) {
+    //     let open_set = self.1;
+    //     for r in 0..num_rows {
+    //         for c in 0..num_cols {
+    //             let pos = (r, c);
+    //             let mut prev_dir = self
+    //                 .2
+    //                 .get(&pos)
+    //                 .map(|dirs| {
+    //                     let mut buf = String::new();
+    //                     if let Some(d) = dirs.back() {
+    //                         buf.push_str(&format!("{}", d));
+    //                     }
+    //                     buf
+    //                 })
+    //                 .unwrap_or("".into());
+    //             prev_dir.push_str(&match open_set.iter().find(|x| x.pos == pos) {
+    //                 Some(n) => format!("{}* ", n.est_cost),
+    //                 None => match self.0.get(&pos) {
+    //                     Some(c) => format!("{c} "),
+    //                     None => format!("{}** ", h(pos)),
+    //                 },
+    //             });
+    //             print!("{prev_dir:>7} ");
+    //         }
+    //         println!();
+    //     }
+    // }
 }
 
 #[cfg(test)]
