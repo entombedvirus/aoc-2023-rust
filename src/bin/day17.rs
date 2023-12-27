@@ -1,6 +1,7 @@
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, BinaryHeap},
+    collections::{BTreeMap, BinaryHeap},
+    fmt::Write,
 };
 
 use anyhow::{Context, Result};
@@ -93,6 +94,8 @@ impl Puzzle {
                 neighbor_node.cost += h(neighbor_node.pos);
                 f.push(Reverse(neighbor_node));
             }
+            // eprintln!("{}", AstarState(self, &f, &g));
+            // wait();
         }
         Some(0)
     }
@@ -201,16 +204,17 @@ impl std::fmt::Display for Direction {
 type Row = usize;
 type Col = usize;
 
+#[allow(unused)]
 #[derive(Debug)]
 struct AstarState<'a>(
     &'a Puzzle,
     &'a BinaryHeap<Reverse<Node>>,
-    &'a BTreeSet<((Row, Col), Direction, u8)>,
+    &'a BTreeMap<((Row, Col), Direction, u8), u32>,
 );
 
 impl<'a> std::fmt::Display for AstarState<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let &Self(puzzle, queue, seen) = self;
+        let &Self(puzzle, queue, costs) = self;
         let queue_nodes: BTreeMap<(Row, Col), Vec<&Node>> =
             queue
                 .iter()
@@ -223,17 +227,22 @@ impl<'a> std::fmt::Display for AstarState<'a> {
         for r in 0..puzzle.num_rows {
             for c in 0..puzzle.num_cols {
                 if let Some(nodes) = queue_nodes.get(&(r, c)) {
-                    write!(f, "[")?;
-                    for n in nodes {
+                    let mut buf = String::new();
+                    write!(&mut buf, "[")?;
+                    for (i, n) in nodes.iter().enumerate() {
+                        if i > 0 {
+                            write!(&mut buf, ", ")?;
+                        }
                         let key = n.key();
-                        write!(f, "<{:<2},{},{:1}> ", n.cost, n.dir, n.num_steps)?;
-                        if seen.contains(&key) {
-                            write!(f, "*")?;
+                        write!(&mut buf, "<{:<2},{},{:1}>", n.cost, n.dir, n.num_steps)?;
+                        if let Some(c) = costs.get(&key) {
+                            write!(&mut buf, "@{c}")?;
                         }
                     }
-                    write!(f, "]")?;
+                    write!(&mut buf, "]")?;
+                    write!(f, "{buf:>15}")?;
                 } else {
-                    write!(f, "{:8} ", "x")?;
+                    write!(f, "{:>15} ", "x")?;
                 }
             }
             writeln!(f)?;
