@@ -1,11 +1,9 @@
-#![allow(unused, dead_code)]
-
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Range};
 
 use anyhow::Result;
 use aoc::{must_parse, runner};
 use nom::{
-    bytes::complete::{is_not, tag},
+    bytes::complete::tag,
     character::complete::{self, alpha1, newline, one_of},
     combinator::{map, opt},
     multi::{count, separated_list1},
@@ -19,7 +17,7 @@ fn main() -> Result<()> {
 fn part_one(input: &str) -> Result<u32> {
     let p = Puzzle::parse(input)?;
     let mut bins = BTreeMap::new();
-    p.run(&mut bins);
+    p.bin_parts(&mut bins);
     Ok(bins["A"].iter().map(|p| p.part_sum()).sum())
 }
 
@@ -28,16 +26,16 @@ fn part_two(input: &str) -> Result<u64> {
     let valid_range = 1..4001;
 
     let mut count = 0;
-    let mut queue = vec![("in", CountState::new(&valid_range))];
+    let mut stack = vec![("in", CountState::new(&valid_range))];
 
     // perform DFS of the graph summing up possibilities every time we reach the "A" terminal node
-    while let Some((name, state)) = queue.pop() {
+    while let Some((name, state)) = stack.pop() {
         let w = &p.workflows[name];
         for (child, state) in w.child_with_state(&state) {
             match child {
                 "A" => count += state.num_possibilities(),
                 "R" => continue,
-                other => queue.push((other, state)),
+                other => stack.push((other, state)),
             }
         }
     }
@@ -121,34 +119,16 @@ impl<'i> Puzzle<'i> {
         must_parse(parser, input)
     }
 
-    fn run(&'i self, bins: &mut BTreeMap<&'i str, Vec<&'i Part>>) {
+    fn bin_parts(&'i self, bins: &mut BTreeMap<&'i str, Vec<&'i Part>>) {
         for part in &self.parts {
             let mut workflow_name = "in";
             while workflow_name != "A" && workflow_name != "R" {
                 workflow_name = self.workflows[workflow_name].run(part);
             }
             bins.entry(workflow_name)
-                .and_modify(|mut parts| parts.push(part))
+                .and_modify(|parts| parts.push(part))
                 .or_insert(vec![part]);
         }
-    }
-
-    fn num_possibilities(&self, valid_range: std::ops::Range<u16>) -> u64 {
-        let mut count = 0;
-
-        let mut queue = vec![("in", CountState::new(&valid_range))];
-        while let Some((name, state)) = queue.pop() {
-            let w = &self.workflows[name];
-            for (child, state) in w.child_with_state(&state) {
-                match child {
-                    "A" => count += state.num_possibilities(),
-                    "R" => continue,
-                    other => queue.push((other, state)),
-                }
-            }
-        }
-
-        count
     }
 }
 
@@ -161,7 +141,7 @@ struct CountState {
 }
 
 impl CountState {
-    fn new(valid_range: &std::ops::Range<u16>) -> Self {
+    fn new(valid_range: &Range<u16>) -> Self {
         Self {
             x: SplittableRange::new(valid_range),
             m: SplittableRange::new(valid_range),
@@ -197,41 +177,31 @@ impl CountState {
 
 #[derive(Debug, Clone)]
 struct SplittableRange {
-    points: BTreeMap<u16, u16>,
+    points: Range<u16>,
 }
 
 impl SplittableRange {
-    fn new(valid_range: &std::ops::Range<u16>) -> SplittableRange {
-        let mut points = BTreeMap::new();
-        points.insert(valid_range.start, valid_range.end);
-        Self { points }
+    fn new(valid_range: &Range<u16>) -> SplittableRange {
+        Self {
+            points: valid_range.clone(),
+        }
     }
 
     fn len(&self) -> u16 {
-        self.points.iter().map(|(start, end)| *end - *start).sum()
+        let Range { start, end } = self.points;
+        end - start
     }
 
     fn apply(&mut self, op: &Operation) {
+        let Range { start, end } = &mut self.points;
         match *op {
-            Operation::LessThan(x) => {
-                self.points.retain(|&start, _| start < x);
-                if let Some(entry) = self.points.last_entry() {
-                    if (*entry.get()) > x {
-                        let closed_start = *entry.key();
-                        entry.remove();
-                        self.points.insert(closed_start, x);
-                    }
-                }
+            Operation::LessThan(t) => {
+                *end = t.min(*end);
+                *start = (*start).min(*end);
             }
-            Operation::GreaterThan(x) => {
-                self.points.retain(|_, end| *end > x);
-                if let Some(entry) = self.points.first_entry() {
-                    if (*entry.key()) <= x {
-                        let open_end = *entry.get();
-                        entry.remove();
-                        self.points.insert(x + 1, open_end);
-                    }
-                }
+            Operation::GreaterThan(t) => {
+                *start = (t + 1).max(*start);
+                *end = (*start).max(*end);
             }
         }
     }
@@ -268,15 +238,15 @@ impl<'i> Workflow<'i> {
         &'i self,
         input: &CountState,
     ) -> impl Iterator<Item = (&'i str, CountState)> + 'i {
-        self.steps
-            .iter()
-            .scan(input.clone(), |state, st| match &st.cond {
-                Some(cond) => {
-                    let child_state = state.restrict_and_shrink(cond);
-                    Some((st.dest_workflow, child_state))
-                }
-                None => Some((st.dest_workflow, state.clone())),
-            })
+        self.steps.iter().scan(input.clone(), |state, st| {
+            Some((
+                st.dest_workflow,
+                st.cond
+                    .as_ref()
+                    .map(|cond| state.restrict_and_shrink(cond))
+                    .unwrap_or_else(|| state.clone()),
+            ))
+        })
     }
 }
 
@@ -303,13 +273,13 @@ struct Condition {
 
 impl Condition {
     fn eval(&self, part: &Part) -> bool {
-        let op = match self.field {
+        let arg = match self.field {
             PartField::X => part.x,
             PartField::M => part.m,
             PartField::A => part.a,
             PartField::S => part.s,
         };
-        self.op.eval(op)
+        self.op.eval(arg)
     }
 }
 
