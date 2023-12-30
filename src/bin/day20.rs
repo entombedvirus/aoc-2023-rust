@@ -1,9 +1,12 @@
 #![allow(unused, dead_code)]
 
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    hash::{BuildHasher, Hasher, RandomState},
+};
 
 use anyhow::{Context, Result};
-use aoc::{must_parse, runner};
+use aoc::{must_parse, runner, wait};
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -27,8 +30,57 @@ fn part_one(input: &str) -> Result<usize> {
     Ok(counter.low_pulses * counter.high_pulses)
 }
 
-fn part_two(_input: &str) -> Result<u32> {
-    todo!()
+fn part_two(input: &str) -> Result<u64> {
+    let mut p = Puzzle::parse(input)?;
+
+    // rx is hooked up to a single module
+    let rx_parents = &p.reverse_edges["rx"];
+    assert!(rx_parents.len() == 1);
+
+    // that parent module is a conjunction module
+    let zh = &p.modules[rx_parents[0]];
+    assert!(zh.is_conjunction_module());
+
+    // which means that all inputs to zh must emit a low pulse
+    // in order for it to emit a low pulse to rx. Let's monitor
+    // how often each of input emit a high pulse individually.
+    let zh_inputs = &p.reverse_edges[zh.name()];
+    let mut counter = SignalCounter::new();
+    for input in zh_inputs {
+        counter.monitor(Signal {
+            from: input,
+            to: zh.name(),
+            pulse: Pulse::High,
+        });
+    }
+
+    // press button enough times that each of zh's input is
+    // Pulse:High at least once
+    while counter.monitored_counts.values().any(|v| *v == 0) {
+        p.press_button(&mut counter);
+    }
+
+    counter
+        .monitored_counts
+        .values()
+        .copied()
+        .reduce(compute_lcm)
+        .context("Unable to find lowest common denominator")
+}
+
+// See: https://en.wikipedia.org/wiki/Least_common_multiple
+fn compute_lcm(a: u64, b: u64) -> u64 {
+    a * (b / compute_gcd_euclid(a, b))
+}
+
+// See: https://en.wikipedia.org/wiki/Euclidean_algorithm
+fn compute_gcd_euclid(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let temp = b;
+        b = a % b;
+        a = temp
+    }
+    a
 }
 
 #[derive(Debug)]
@@ -98,7 +150,7 @@ impl<'i> Puzzle<'i> {
         }
     }
 
-    fn press_button(&mut self, counter: &mut SignalCounter) {
+    fn press_button(&mut self, counter: &mut SignalCounter<'i>) {
         let mut queue = VecDeque::new();
         queue.push_back(Signal {
             from: "button",
@@ -106,8 +158,9 @@ impl<'i> Puzzle<'i> {
             pulse: Pulse::Low,
         });
 
+        counter.button_press_count += 1;
         while let Some(signal) = queue.pop_front() {
-            counter.incr(signal.pulse);
+            counter.incr(signal);
             self.propagate(signal, &mut queue);
         }
     }
@@ -151,31 +204,62 @@ impl<'i> Puzzle<'i> {
             queue.extend(new_signals);
         }
     }
+
+    fn state_hash(&self) -> u64 {
+        let rand_state = RandomState::new();
+        let mut hasher = rand_state.build_hasher();
+
+        for module in self.modules.values() {
+            match module {
+                Module::FlipFlop { is_on, .. } => hasher.write_u8(*is_on as u8),
+                Module::Conjunction { inputs, .. } => {
+                    for input_state in inputs.values() {
+                        hasher.write_u8(*input_state as u8);
+                    }
+                }
+                Module::Broadcast => (),
+            }
+        }
+        hasher.finish()
+    }
 }
 
 #[derive(Debug)]
-struct SignalCounter {
+struct SignalCounter<'i> {
     low_pulses: usize,
     high_pulses: usize,
+    button_press_count: u64,
+    monitored_counts: BTreeMap<Signal<'i>, u64>,
 }
 
-impl SignalCounter {
+impl<'i> SignalCounter<'i> {
     fn new() -> Self {
         SignalCounter {
             low_pulses: 0,
             high_pulses: 0,
+            button_press_count: 0,
+            monitored_counts: Default::default(),
         }
     }
 
-    fn incr(&mut self, pulse: Pulse) {
-        match pulse {
+    fn incr(&mut self, sig: Signal<'i>) {
+        match sig.pulse {
             Pulse::Low => self.low_pulses += 1,
             Pulse::High => self.high_pulses += 1,
         }
+        self.monitored_counts.entry(sig).and_modify(|v| {
+            if *v == 0 {
+                *v = self.button_press_count;
+            }
+        });
+    }
+
+    fn monitor(&mut self, sig: Signal<'i>) {
+        self.monitored_counts.entry(sig).or_insert(0);
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 struct Signal<'i> {
     from: &'i str,
     to: &'i str,
@@ -203,9 +287,16 @@ impl<'i> Module<'i> {
             Self::Broadcast { .. } => "broadcaster",
         }
     }
+
+    fn is_conjunction_module(&self) -> bool {
+        match self {
+            Self::Conjunction { .. } => true,
+            _ => false,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Pulse {
     Low,
     High,
