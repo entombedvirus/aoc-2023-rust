@@ -1,12 +1,7 @@
-#![allow(unused, dead_code)]
-
-use std::{
-    collections::{BTreeMap, VecDeque},
-    hash::{BuildHasher, Hasher, RandomState},
-};
+use std::collections::{BTreeMap, VecDeque};
 
 use anyhow::{Context, Result};
-use aoc::{must_parse, runner, wait};
+use aoc::{must_parse, runner};
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -60,6 +55,8 @@ fn part_two(input: &str) -> Result<u64> {
         p.press_button(&mut counter);
     }
 
+    // the number of attempts when all of the inputs will simultaneously emit a high pulse to zh is
+    // the LCM (least common denominator) of the cycle period of each input into zh
     counter
         .monitored_counts
         .values()
@@ -161,18 +158,18 @@ impl<'i> Puzzle<'i> {
         counter.button_press_count += 1;
         while let Some(signal) = queue.pop_front() {
             counter.incr(signal);
-            self.propagate(signal, &mut queue);
+            queue.extend(self.propagate(signal));
         }
     }
 
-    fn propagate(&mut self, signal: Signal<'i>, queue: &mut VecDeque<Signal<'i>>) {
+    fn propagate(&mut self, signal: Signal<'i>) -> Vec<Signal<'i>> {
         let Some(module) = self.modules.get_mut(signal.to) else {
             // sink module that has no state and is not connected to anything
-            return;
+            return vec![];
         };
 
         let new_pulse = match module {
-            Module::FlipFlop { name, is_on } => {
+            Module::FlipFlop { is_on, .. } => {
                 if signal.pulse == Pulse::Low {
                     // toggle boolean
                     *is_on ^= true;
@@ -181,7 +178,7 @@ impl<'i> Puzzle<'i> {
                     None
                 }
             }
-            Module::Conjunction { name, inputs } => {
+            Module::Conjunction { inputs, .. } => {
                 inputs.entry(signal.from).and_modify(|s| *s = signal.pulse);
                 Some(
                     if inputs.values().all(|remembered| remembered == &Pulse::High) {
@@ -193,34 +190,17 @@ impl<'i> Puzzle<'i> {
             }
             Module::Broadcast => Some(signal.pulse),
         };
-
-        if let Some(new_pulse) = new_pulse {
-            let connected_to = &self.forward_edges[signal.to];
-            let new_signals = connected_to.iter().map(|dest| Signal {
-                from: signal.to,
-                to: dest,
-                pulse: new_pulse,
-            });
-            queue.extend(new_signals);
-        }
-    }
-
-    fn state_hash(&self) -> u64 {
-        let rand_state = RandomState::new();
-        let mut hasher = rand_state.build_hasher();
-
-        for module in self.modules.values() {
-            match module {
-                Module::FlipFlop { is_on, .. } => hasher.write_u8(*is_on as u8),
-                Module::Conjunction { inputs, .. } => {
-                    for input_state in inputs.values() {
-                        hasher.write_u8(*input_state as u8);
-                    }
-                }
-                Module::Broadcast => (),
-            }
-        }
-        hasher.finish()
+        new_pulse
+            .iter()
+            .flat_map(|&new_pulse| {
+                let connected_to = &self.forward_edges[signal.to];
+                connected_to.iter().map(move |dest| Signal {
+                    from: signal.to,
+                    to: dest,
+                    pulse: new_pulse,
+                })
+            })
+            .collect()
     }
 }
 
