@@ -2,7 +2,7 @@
 
 use std::collections::{
     btree_map::{Entry, OccupiedEntry},
-    BTreeMap, BTreeSet,
+    BTreeMap, BTreeSet, VecDeque,
 };
 
 use anyhow::{Context, Result};
@@ -12,26 +12,17 @@ fn main() -> Result<()> {
     runner(part_one, part_two)
 }
 
-fn part_one(input: &str) -> Result<u32> {
-    let p = Puzzle::parse(input)?;
-    let start_pos = {
-        let idx = p
-            .tiles
-            .iter()
-            .position(|t| t == &Tile::Start)
-            .expect("start tile is missing");
-        ((idx / p.num_cols) as isize, (idx % p.num_cols) as isize)
-    };
-    let mut cache = BTreeMap::new();
-    p.num_reachable_tiles2(start_pos, 64, &mut cache);
-    cache
-        .get(&(start_pos, 64))
-        .map(|positions| positions.len() as u32)
-        .context("no result")
+fn part_one(input: &str) -> Result<usize> {
+    let mut p = Puzzle::parse(input)?;
+    p.compute_min_steps();
+    Ok(p.num_reachable_tiles(64))
 }
 
-fn part_two(_input: &str) -> Result<u32> {
-    todo!()
+// See: https://github.com/villuna/aoc23/wiki/A-Geometric-solution-to-advent-of-code-2023,-day-21
+fn part_two(input: &str) -> Result<usize> {
+    let mut p = Puzzle::parse(input)?;
+    p.compute_min_steps();
+    Ok(p.compute_reachable_tiles(26501365))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +48,10 @@ struct Puzzle {
     num_rows: usize,
     num_cols: usize,
     tiles: Vec<Tile>,
+    start_pos: (isize, isize),
+    min_steps_needed: BTreeMap<(isize, isize), u32>,
+
+    infinite_tiles: bool,
 }
 
 type PositionSet = BTreeSet<(isize, isize)>;
@@ -71,110 +66,137 @@ impl Puzzle {
             .next()
             .map(|line| line.len())
             .context("input is empty")?;
-        Ok(Self {
-            num_rows,
-            num_cols,
-            tiles: input
-                .lines()
-                .flat_map(|line| line.as_bytes())
-                .map(|ch| ch.into())
-                .collect(),
-        })
-    }
-
-    fn get(&self, row: isize, col: isize) -> Option<Tile> {
-        let idx = row * self.num_cols as isize + col;
-        self.tiles.get(idx as usize).copied()
-    }
-
-    fn num_reachable_tiles2(
-        &self,
-        start: (isize, isize),
-        num_steps: u32,
-        cache: &mut BTreeMap<PositionKey, PositionSet>,
-    ) {
-        let key = (start, num_steps);
-        if cache.contains_key(&key) {
-            // noop
-        } else if num_steps == 0 {
-            let mut s = BTreeSet::new();
-            s.insert(start);
-            cache.insert(key, s);
-        } else {
-            let neighbors: Vec<_> = [(0, 1), (0, -1), (-1, 0), (1, 0)]
-                .into_iter()
-                .map(|(dr, dc)| (start.0 + dr, start.1 + dc))
-                .collect();
-
-            let mut merged = BTreeSet::new();
-            for new_pos in neighbors {
-                if let Some(Tile::Grass | Tile::Start) = self.get(new_pos.0, new_pos.1) {
-                    self.num_reachable_tiles2(new_pos, num_steps - 1, cache);
-                    let key = (new_pos, num_steps - 1);
-                    if let Some(result) = cache.get(&key) {
-                        merged.extend(result);
-                    }
-                }
-            }
-            cache.insert(key, merged);
-        }
-    }
-
-    fn num_reachable_tiles(&self, num_steps: u32) -> u32 {
+        let tiles: Vec<_> = input
+            .lines()
+            .flat_map(|line| line.as_bytes())
+            .map(|ch| ch.into())
+            .collect();
         let start_pos = {
-            let idx = self
-                .tiles
+            let idx = tiles
                 .iter()
                 .position(|t| t == &Tile::Start)
                 .expect("start tile is missing");
-            (
-                (idx / self.num_cols) as isize,
-                (idx % self.num_cols) as isize,
-            )
+            ((idx / num_cols) as isize, (idx % num_cols) as isize)
         };
-        let mut fringe = vec![(start_pos, num_steps)];
-        let mut end_positions = BTreeSet::new();
+        Ok(Self {
+            num_rows,
+            num_cols,
+            start_pos,
+            tiles,
+            infinite_tiles: false,
+            min_steps_needed: Default::default(),
+        })
+    }
 
-        while let Some((pos @ (row, col), steps_left)) = fringe.pop() {
-            match self.get(row, col) {
-                Some(Tile::Grass | Tile::Start) => {
-                    if steps_left == 0 {
-                        if end_positions.insert(pos) {
-                            // let p = TilePrinter(self, &end_positions);
-                            // eprintln!("{p}");
-                            // wait();
-                        }
-                    } else {
+    fn get(&self, mut row: isize, mut col: isize) -> Option<Tile> {
+        // normalize out of bound coordinates to simulate infinite tiles
+        if self.infinite_tiles {
+            row %= self.num_rows as isize;
+            col %= self.num_cols as isize;
+            if row < 0 {
+                row = self.num_rows as isize + row;
+            }
+            if col < 0 {
+                col = self.num_cols as isize + col
+            }
+        }
+        if row < 0 || row >= self.num_rows as isize || col < 0 || col >= self.num_cols as isize {
+            None
+        } else {
+            let idx = row * self.num_cols as isize + col;
+            self.tiles.get(idx as usize).copied()
+        }
+    }
+
+    fn compute_min_steps(&mut self) {
+        let start_pos = self.start_pos;
+        let mut queue = VecDeque::new();
+        queue.push_back((start_pos, 0));
+
+        if self.min_steps_needed.is_empty() {
+            // BFS to find the shortest path to each tile
+            while let Some((pos @ (row, col), min_steps)) = queue.pop_front() {
+                match self.get(row, col) {
+                    Some(Tile::Grass | Tile::Start) => {
+                        self.min_steps_needed.entry(pos).or_insert(min_steps);
                         for (dr, dc) in [(0, 1), (0, -1), (-1, 0), (1, 0)] {
                             let new_pos = (row + dr, col + dc);
-                            match self.get(new_pos.0, new_pos.1) {
-                                Some(Tile::Grass | Tile::Start) => {
-                                    fringe.push((new_pos, steps_left - 1))
-                                }
-                                _ => (),
+                            if let Some(Tile::Start | Tile::Grass) = self.get(new_pos.0, new_pos.1)
+                            {
+                                self.min_steps_needed.entry(new_pos).or_insert_with(|| {
+                                    queue.push_back((new_pos, min_steps + 1));
+                                    eprintln!(
+                                        "pos: {}, {}, min_steps: {min_steps} -> {}, {}",
+                                        pos.0, pos.1, new_pos.0, new_pos.1
+                                    );
+                                    min_steps + 1
+                                });
                             }
                         }
                     }
+                    _ => (),
                 }
-                _ => (),
             }
         }
+    }
 
-        end_positions.len() as u32
+    fn num_reachable_tiles(&self, num_steps: u32) -> usize {
+        let parity = |n| n % 2;
+        // find all the squares reachable within num_steps
+        self.min_steps_needed
+            .values()
+            .filter(|steps| **steps <= num_steps && parity(**steps) == parity(num_steps))
+            .count()
+    }
+
+    fn compute_reachable_tiles(&self, num_steps: u32) -> usize {
+        // the row and column that the starting tile is on is unbostructed: there are no stones
+        // This means that if we can take num_steps straight in up, down, left or right and count how
+        // many times the original map repeats.
+        let steps_to_edge = num_steps % self.num_cols as u32;
+        let num_reps = num_steps / self.num_cols as u32;
+
+        let even_corners = self
+            .min_steps_needed
+            .values()
+            .filter(|v| **v % 2 == 0 && **v > steps_to_edge)
+            .count();
+        let odd_corners = self
+            .min_steps_needed
+            .values()
+            .filter(|v| **v % 2 == 1 && **v > steps_to_edge)
+            .count();
+
+        let even_full = self
+            .min_steps_needed
+            .values()
+            .filter(|v| **v % 2 == 0)
+            .count();
+        let odd_full = self
+            .min_steps_needed
+            .values()
+            .filter(|v| **v % 2 == 1)
+            .count();
+
+        let n = ((num_steps as usize) - (self.num_cols as usize / 2)) / self.num_cols as usize;
+
+        ((n + 1) * (n + 1)) * odd_full + (n * n) * even_full - (n + 1) * odd_corners
+            + n * even_corners
     }
 }
 
 #[derive(Debug)]
-struct TilePrinter<'i>(&'i Puzzle, &'i BTreeSet<(isize, isize)>);
+struct TilePrinter<'i>(&'i Puzzle);
 
 impl std::fmt::Display for TilePrinter<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let &Self(puzzle, end_positions) = self;
+        let puzzle = self.0;
+        let min_steps_needed = &puzzle.min_steps_needed;
         for row in 0..puzzle.num_rows {
             for col in 0..puzzle.num_cols {
                 let pos = (row as isize, col as isize);
-                if end_positions.contains(&pos) {
-                    write!(f, "O")?;
+                if min_steps_needed.contains_key(&pos) {
+                    write!(f, "{}", min_steps_needed[&pos])?;
                 } else {
                     write!(
                         f,
@@ -207,18 +229,12 @@ mod tests {
 
     #[test]
     fn test_part_one() -> Result<()> {
-        let p = Puzzle::parse(INPUT)?;
-        let start_pos = (5, 5);
-        let mut cache = BTreeMap::new();
-
+        let mut p = Puzzle::parse(INPUT)?;
+        p.compute_min_steps();
         let ks = [(1, 2), (2, 4), (3, 6), (6, 16)];
         for (num_steps, expected) in ks {
-            p.num_reachable_tiles2(start_pos, num_steps, &mut cache);
-            assert_eq!(
-                cache.get(&(start_pos, num_steps)).map(BTreeSet::len),
-                Some(expected),
-                "num_steps: {num_steps}"
-            );
+            let n = p.num_reachable_tiles(num_steps);
+            assert_eq!(n, expected, "num_steps: {num_steps}");
         }
         Ok(())
     }
