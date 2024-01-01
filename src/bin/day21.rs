@@ -1,12 +1,7 @@
-#![allow(unused, dead_code)]
-
-use std::collections::{
-    btree_map::{Entry, OccupiedEntry},
-    BTreeMap, BTreeSet, VecDeque,
-};
+use std::collections::{BTreeMap, VecDeque};
 
 use anyhow::{Context, Result};
-use aoc::{runner, wait};
+use aoc::runner;
 
 fn main() -> Result<()> {
     runner(part_one, part_two)
@@ -18,7 +13,6 @@ fn part_one(input: &str) -> Result<usize> {
     Ok(p.num_reachable_tiles(64))
 }
 
-// See: https://github.com/villuna/aoc23/wiki/A-Geometric-solution-to-advent-of-code-2023,-day-21
 fn part_two(input: &str) -> Result<usize> {
     let mut p = Puzzle::parse(input)?;
     p.compute_min_steps();
@@ -53,10 +47,6 @@ struct Puzzle {
 
     infinite_tiles: bool,
 }
-
-type PositionSet = BTreeSet<(isize, isize)>;
-// row, col, num_steps
-type PositionKey = ((isize, isize), u32);
 
 impl Puzzle {
     fn parse(input: &str) -> Result<Self> {
@@ -108,6 +98,7 @@ impl Puzzle {
         }
     }
 
+    // See: https://github.com/villuna/aoc23/wiki/A-Geometric-solution-to-advent-of-code-2023,-day-21
     fn compute_min_steps(&mut self) {
         let start_pos = self.start_pos;
         let mut queue = VecDeque::new();
@@ -125,10 +116,6 @@ impl Puzzle {
                             {
                                 self.min_steps_needed.entry(new_pos).or_insert_with(|| {
                                     queue.push_back((new_pos, min_steps + 1));
-                                    eprintln!(
-                                        "pos: {}, {}, min_steps: {min_steps} -> {}, {}",
-                                        pos.0, pos.1, new_pos.0, new_pos.1
-                                    );
                                     min_steps + 1
                                 });
                             }
@@ -150,11 +137,14 @@ impl Puzzle {
     }
 
     fn compute_reachable_tiles(&self, num_steps: u32) -> usize {
+        assert!(
+            num_steps as usize >= self.num_cols,
+            "use num_reachable_tiles instead"
+        );
         // the row and column that the starting tile is on is unbostructed: there are no stones
         // This means that if we can take num_steps straight in up, down, left or right and count how
         // many times the original map repeats.
         let steps_to_edge = num_steps % self.num_cols as u32;
-        let num_reps = num_steps / self.num_cols as u32;
 
         let even_corners = self
             .min_steps_needed
@@ -185,6 +175,7 @@ impl Puzzle {
     }
 }
 
+#[allow(unused)]
 #[derive(Debug)]
 struct TilePrinter<'i>(&'i Puzzle);
 
