@@ -1,6 +1,9 @@
 #![allow(unused, dead_code)]
 #![feature(extract_if)]
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, VecDeque},
+};
 
 use anyhow::Result;
 use aoc::{must_parse, runner, wait};
@@ -21,6 +24,7 @@ fn part_one(input: &str) -> Result<u32> {
 
 fn part_two(input: &str) -> Result<u32> {
     let mut p = Puzzle::parse(input)?;
+
     // treat all slides as normal tiles
     for tile in &mut p.tiles {
         match *tile {
@@ -32,29 +36,77 @@ fn part_two(input: &str) -> Result<u32> {
     let start = p.start_pos().ok_or(anyhow::format_err!("no start pos"))?;
     let finish = p.finish_pos().ok_or(anyhow::format_err!("no finish pos"))?;
     let graph = p.as_graph(start);
-    eprintln!("{graph}");
+    eprintln!("{graph}\ngraph_len: {}", graph.neighbors.len());
+
+    let nodes: Vec<_> = graph.neighbors.keys().cloned().collect();
+    assert!(
+        nodes.len() <= 64,
+        "cannot only handle graphs with <= 64 nodes"
+    );
+
+    let neighbor_bit_masks: Vec<_> = nodes
+        .iter()
+        .map(|node| {
+            graph.neighbors[node].iter().fold(0u64, |acc, npos| {
+                let idx = nodes
+                    .iter()
+                    .position(|x| x == npos)
+                    .expect("all vertices are expected to be found");
+                acc | (1 << idx)
+            })
+        })
+        .collect();
 
     let mut longest_path = None;
-    let mut q = VecDeque::new();
-    q.push_back((start, BTreeSet::new(), String::new(), 0u32));
+    let mut q = Vec::new();
 
-    while let Some((cur_node, mut seen, mut path, cost)) = q.pop_back() {
-        seen.insert(cur_node);
-        if !path.is_empty() {
-            path.push_str(format!(" -{cost}-> ").as_str())
-        }
-        path.push_str(format!("{cur_node:?}").as_str());
-        if cur_node == finish {
+    let start_idx = nodes
+        .iter()
+        .position(|node| node == &start)
+        .expect("start node not found");
+    let finish_idx = nodes
+        .iter()
+        .position(|node| node == &finish)
+        .expect("finish node not found");
+    q.push((start_idx, SeenMask::new(), 0u32));
+
+    while let Some((cur_idx, mut seen, cost)) = q.pop() {
+        seen.insert(cur_idx);
+        if cur_idx == finish_idx {
             longest_path = std::cmp::max(longest_path, Some(cost));
             continue;
         }
-        for (neighbor, ncost) in graph.edges_from(cur_node) {
-            if !seen.contains(&neighbor) {
-                q.push_back((neighbor, seen.clone(), path.clone(), cost + ncost));
-            }
+        let mut neighbors = seen.filter(neighbor_bit_masks[cur_idx]);
+        while neighbors != 0 {
+            let neighbor_idx = neighbors.trailing_zeros() as usize;
+            let ncost = graph.edges[&(nodes[cur_idx], nodes[neighbor_idx])];
+            q.push((neighbor_idx, seen, cost + ncost));
+            neighbors ^= 1 << neighbor_idx;
         }
     }
+
     longest_path.ok_or(anyhow::format_err!("path to finish not found"))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SeenMask(u64);
+
+impl SeenMask {
+    fn new() -> Self {
+        Self(0)
+    }
+
+    fn contains(&self, off: usize) -> bool {
+        self.0 & (1 << off) != 0
+    }
+
+    fn insert(&mut self, off: usize) {
+        self.0 |= (1 << off)
+    }
+
+    fn filter(&self, other: u64) -> u64 {
+        other & !self.0
+    }
 }
 
 type Pos = (isize, isize);
@@ -264,13 +316,11 @@ impl Puzzle {
                     [npos] => {
                         if let Some((pending_start_pos, _)) = q.iter().find(|(_, ps)| ps == npos) {
                             graph.add_edge(segment_start_pos, *pending_start_pos, cost + 2);
-                            break;
                         }
                         cur_pos = *npos;
                         continue;
                     }
                     many_npos => {
-                        // cost += 1;
                         graph.add_edge(segment_start_pos, cur_pos, cost);
                         q.extend(many_npos.iter().copied().map(|npos| (cur_pos, npos)));
                         break;
@@ -281,29 +331,6 @@ impl Puzzle {
 
         graph
     }
-
-    // fn debug_print(
-    //     &self,
-    //     q: &[(Node, (isize, isize))],
-    //     node: &Node,
-    //     cur_pos: (isize, isize),
-    //     seen: &BTreeSet<(isize, isize)>,
-    // ) {
-    //     for r in 0..self.num_rows {
-    //         for c in 0..self.num_cols {
-    //             let pos = (r as isize, c as isize);
-    //             let ch = if q.iter().find(|(n, _)| n.pos == pos).is_some() {
-    //                 'P'
-    //             } else if seen.contains(&pos) {
-    //                 'x'
-    //             } else {
-    //                 char::from(self.tiles[r * self.num_cols + c])
-    //             };
-    //             eprint!("{ch}");
-    //         }
-    //         eprintln!();
-    //     }
-    // }
 }
 
 #[cfg(test)]
