@@ -1,13 +1,10 @@
-#![allow(unused, dead_code)]
-#![feature(extract_if)]
 use std::{
-    borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
+    num::NonZeroUsize,
 };
 
 use anyhow::Result;
-use aoc::{must_parse, runner, wait};
-use nom::{character::complete::newline, multi::separated_list1};
+use aoc::runner;
 
 fn main() -> Result<()> {
     runner(part_one, part_two)
@@ -33,55 +30,38 @@ fn part_two(input: &str) -> Result<u32> {
         }
     }
 
-    let start = p.start_pos().ok_or(anyhow::format_err!("no start pos"))?;
-    let finish = p.finish_pos().ok_or(anyhow::format_err!("no finish pos"))?;
-    let graph = p.as_graph(start);
-    eprintln!("{graph}\ngraph_len: {}", graph.neighbors.len());
+    let (nodes, neighbors, costs) = {
+        let start = p.start_pos().ok_or(anyhow::format_err!("no start pos"))?;
+        let graph = p.as_graph(start);
 
-    let nodes: Vec<_> = graph.neighbors.keys().cloned().collect();
-    assert!(
-        nodes.len() <= 64,
-        "cannot only handle graphs with <= 64 nodes"
-    );
+        let nodes = graph.get_sorted_nodes();
+        let neighbors = graph.get_neighbor_bitsets(&nodes)?;
+        let costs = graph.get_costs_lookup_table(&nodes);
+        (nodes, neighbors, costs)
+    };
 
-    let neighbor_bit_masks: Vec<_> = nodes
-        .iter()
-        .map(|node| {
-            graph.neighbors[node].iter().fold(0u64, |acc, npos| {
-                let idx = nodes
-                    .iter()
-                    .position(|x| x == npos)
-                    .expect("all vertices are expected to be found");
-                acc | (1 << idx)
-            })
-        })
-        .collect();
+    // nodes are sorted by row number first, hence start and finish end up as being first and last
+    // nodes respectively
+    let start_idx = 0;
+    let finish_idx = nodes.len() - 1;
 
     let mut longest_path = None;
-    let mut q = Vec::new();
 
-    let start_idx = nodes
-        .iter()
-        .position(|node| node == &start)
-        .expect("start node not found");
-    let finish_idx = nodes
-        .iter()
-        .position(|node| node == &finish)
-        .expect("finish node not found");
-    q.push((start_idx, SeenMask::new(), 0u32));
+    let mut q = Vec::with_capacity(nodes.len());
+    q.push((start_idx, BitSet::new(), 0u32));
 
-    while let Some((cur_idx, mut seen, cost)) = q.pop() {
-        seen.insert(cur_idx);
-        if cur_idx == finish_idx {
+    while let Some((from_node_idx, mut seen, cost)) = q.pop() {
+        seen.set(from_node_idx);
+        if from_node_idx == finish_idx {
             longest_path = std::cmp::max(longest_path, Some(cost));
             continue;
         }
-        let mut neighbors = seen.filter(neighbor_bit_masks[cur_idx]);
-        while neighbors != 0 {
-            let neighbor_idx = neighbors.trailing_zeros() as usize;
-            let ncost = graph.edges[&(nodes[cur_idx], nodes[neighbor_idx])];
-            q.push((neighbor_idx, seen, cost + ncost));
-            neighbors ^= 1 << neighbor_idx;
+        for neighbor_idx in neighbors[from_node_idx].difference(seen) {
+            q.push((
+                neighbor_idx.get(),
+                seen,
+                cost + costs[from_node_idx][neighbor_idx.get()],
+            ));
         }
     }
 
@@ -89,25 +69,56 @@ fn part_two(input: &str) -> Result<u32> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SeenMask(u64);
+struct BitSet(u64);
 
-impl SeenMask {
+impl BitSet {
     fn new() -> Self {
         Self(0)
     }
 
-    fn contains(&self, off: usize) -> bool {
-        self.0 & (1 << off) != 0
+    fn set(&mut self, off: usize) {
+        self.0 |= 1 << off
     }
 
-    fn insert(&mut self, off: usize) {
-        self.0 |= (1 << off)
-    }
-
-    fn filter(&self, other: u64) -> u64 {
-        other & !self.0
+    fn difference(&self, Self(other_bits): Self) -> Self {
+        Self(self.0 & !other_bits)
     }
 }
+
+impl std::iter::IntoIterator for BitSet {
+    type Item = NonZeroUsize;
+    type IntoIter = BitSetIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        BitSetIter(self.0)
+    }
+}
+
+#[derive(Debug)]
+struct BitSetIter(u64);
+
+impl std::iter::Iterator for BitSetIter {
+    type Item = NonZeroUsize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.0 {
+            0 => None,
+            bits => {
+                let idx = bits.trailing_zeros() as usize;
+                self.0 ^= 1 << idx;
+                NonZeroUsize::new(idx)
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.0.count_ones() as usize;
+        (n, Some(n))
+    }
+}
+
+impl std::iter::ExactSizeIterator for BitSetIter {}
+impl std::iter::FusedIterator for BitSetIter {}
 
 type Pos = (isize, isize);
 
@@ -125,15 +136,47 @@ impl Graph {
         self.neighbors.entry(n2).or_default().insert(n1);
     }
 
-    fn edges_from<'a>(&'a self, cur_node: (isize, isize)) -> impl Iterator<Item = (Pos, u32)> + 'a {
-        self.neighbors[&cur_node]
+    fn get_sorted_nodes(&self) -> Vec<Pos> {
+        self.neighbors.keys().cloned().collect()
+    }
+
+    fn get_neighbor_bitsets(&self, nodes: &[Pos]) -> Result<Vec<BitSet>> {
+        anyhow::ensure!(
+            nodes.len() <= 64,
+            "cannot only handle graphs with <= 64 nodes"
+        );
+        Ok(nodes
             .iter()
-            .map(move |neighbor| (*neighbor, self.edges[&(cur_node, *neighbor)]))
-        // self.edges
-        //     .iter()
-        //     .skip_while(move |((from, _), _)| *from != cur_node)
-        //     .take_while(move |((from, _), _)| *from == cur_node)
-        //     .map(|((_from, to), cost)| (*to, *cost))
+            .map(|node| {
+                let neighbor_indices = self.neighbors[node].iter().map(|neighbor| {
+                    nodes
+                        .iter()
+                        .position(|x| x == neighbor)
+                        .expect("all neighbors are expected to be in nodes")
+                });
+                let mut neighbors = BitSet::new();
+                for idx in neighbor_indices {
+                    neighbors.set(idx);
+                }
+                neighbors
+            })
+            .collect())
+    }
+
+    fn get_costs_lookup_table(&self, nodes: &[Pos]) -> Vec<Vec<u32>> {
+        let mut lut = vec![vec![0u32; nodes.len()]; nodes.len()];
+        for ((from, to), cost) in &self.edges {
+            let from_idx = nodes
+                .iter()
+                .position(|n| n == from)
+                .expect("from node not found");
+            let to_idx = nodes
+                .iter()
+                .position(|n| n == to)
+                .expect("to node not found");
+            lut[from_idx][to_idx] = *cost;
+        }
+        lut
     }
 }
 
