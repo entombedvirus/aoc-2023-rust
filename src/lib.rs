@@ -2,6 +2,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
+pub mod bit_set;
+
 pub fn runner<A: std::fmt::Display, B: std::fmt::Display>(
     part_one: fn(&str) -> Result<A>,
     part_two: fn(&str) -> Result<B>,
