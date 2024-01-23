@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use aoc::bit_set::BitSet;
-use aoc::{runner, wait};
+use aoc::runner;
 
 fn main() -> Result<()> {
     runner(part_one, part_two)
@@ -52,11 +52,9 @@ struct Graph {
 }
 
 impl Graph {
-    fn add_edge(&mut self, n1: Pos, n2: Pos, cost: u16) {
+    fn add_directed_edge(&mut self, n1: Pos, n2: Pos, cost: u16) {
         self.edges.entry((n1, n2)).or_insert(cost);
-        // self.edges.entry((n2, n1)).or_insert(cost);
         self.neighbors.entry(n1).or_default().insert(n2);
-        // self.neighbors.entry(n2).or_default().insert(n1);
     }
 
     fn get_sorted_nodes(&self) -> Vec<Pos> {
@@ -74,28 +72,19 @@ impl Graph {
             nodes.len() <= 64,
             "cannot only handle graphs with <= 64 nodes"
         );
-        let empty = BTreeSet::new();
-        Ok(nodes
-            .iter()
-            .map(|node| {
-                let neighbor_indices =
-                    self.neighbors
-                        .get(node)
-                        .unwrap_or(&empty)
-                        .iter()
-                        .map(|neighbor| {
-                            nodes
-                                .iter()
-                                .position(|x| x == neighbor)
-                                .expect("all neighbors are expected to be in nodes")
-                        });
-                let mut neighbors = BitSet::new();
-                for idx in neighbor_indices {
-                    neighbors.set(idx);
-                }
-                neighbors
-            })
-            .collect())
+        let build_bitset = |node| {
+            let Some(neighbors) = self.neighbors.get(node) else {
+                return BitSet::new();
+            };
+            let find_position = |neighbor| {
+                nodes
+                    .iter()
+                    .position(|x| x == neighbor)
+                    .expect("all neighbors are expected to be in nodes")
+            };
+            BitSet::from_iter(neighbors.iter().map(find_position))
+        };
+        Ok(nodes.iter().map(build_bitset).collect())
     }
 
     fn get_costs_lookup_table(&self, nodes: &[Pos]) -> CostLut {
@@ -163,15 +152,6 @@ impl Puzzle {
         })
     }
 
-    fn start_pos(&self) -> Option<(isize, isize)> {
-        self.tiles.get(0..self.num_cols).and_then(|first_line| {
-            first_line
-                .iter()
-                .position(|&ch| ch == b'.')
-                .map(|idx| (0, idx as isize))
-        })
-    }
-
     fn get_tile(&self, (row, col): (isize, isize)) -> Option<u8> {
         if (0..self.num_rows).contains(&(row as usize))
             && (0..self.num_cols).contains(&(col as usize))
@@ -212,12 +192,8 @@ impl Puzzle {
 
     fn longest_path(&self) -> Result<u16> {
         let (nodes, neighbors, costs) = {
-            let start = self
-                .start_pos()
-                .ok_or(anyhow::format_err!("no start pos"))?;
-            let graph = self.as_graph(start);
+            let graph = self.as_graph();
 
-            eprintln!("{graph}");
             let nodes = graph.get_sorted_nodes();
             let neighbors = graph.get_neighbor_bitsets(&nodes)?;
             let costs = graph.get_costs_lookup_table(&nodes);
@@ -253,9 +229,7 @@ impl Puzzle {
         longest_path.ok_or(anyhow::format_err!("path to finish not found"))
     }
 
-    fn as_graph(&self, start: (isize, isize)) -> Graph {
-        let mut graph = Graph::default();
-
+    fn as_graph(&self) -> Graph {
         let nodes: Vec<_> = (0..self.num_rows)
             .flat_map(|r| (0..self.num_cols).map(move |c| (r as isize, c as isize)))
             .filter(|(r, c)| {
@@ -276,64 +250,29 @@ impl Puzzle {
             })
             .collect();
 
+        let find_end_node = |start_node, mut cur_node| {
+            let mut cost = 1_u16;
+            let mut prev_node = start_node;
+            while !nodes.contains(&cur_node) {
+                let next_node = self
+                    .get_neighbor_pos(cur_node)
+                    .into_iter()
+                    .find(|&npos| npos != prev_node)?;
+                prev_node = cur_node;
+                cur_node = next_node;
+                cost += 1;
+            }
+            Some((cur_node, cost))
+        };
+
+        let mut graph = Graph::default();
         for start_node in &nodes {
-            let mut q = self.get_neighbor_pos(*start_node);
-            while let Some(mut cur_node) = q.pop() {
-                let mut cost = 1_u16;
-                let mut prev_node = *start_node;
-                loop {
-                    if nodes.contains(&cur_node) {
-                        graph.add_edge(*start_node, cur_node, cost);
-                        break;
-                    };
-                    let Some(next_node) = self
-                        .get_neighbor_pos(cur_node)
-                        .into_iter()
-                        .find(|&npos| npos != prev_node)
-                    else {
-                        break;
-                    };
-                    prev_node = cur_node;
-                    cur_node = next_node;
-                    cost += 1;
+            for cur_node in self.get_neighbor_pos(*start_node) {
+                if let Some((end_node, cost)) = find_end_node(*start_node, cur_node) {
+                    graph.add_directed_edge(*start_node, end_node, cost);
                 }
             }
         }
-        // q.push((start, (start.0 + 1, start.1)));
-
-        // let mut seen = BTreeSet::new();
-        // seen.insert(start);
-
-        // while let Some((segment_start_pos, mut cur_pos)) = q.pop() {
-        //     let mut cost = 0u16;
-        //     loop {
-        //         seen.insert(cur_pos);
-        //         cost += 1;
-        //         let mut neighbor_positions = self.get_neighbor_pos(cur_pos);
-        //         neighbor_positions.retain(|pos| !seen.contains(pos));
-        //         match &neighbor_positions[..] {
-        //             [] => {
-        //                 if cost > 1 {
-        //                     graph.add_edge(segment_start_pos, cur_pos, cost);
-        //                 }
-        //                 break;
-        //             }
-        //             [npos] => {
-        //                 if let Some((pending_start_pos, _)) = q.iter().find(|(_, ps)| ps == npos) {
-        //                     graph.add_edge(segment_start_pos, *pending_start_pos, cost + 2);
-        //                 }
-        //                 cur_pos = *npos;
-        //                 continue;
-        //             }
-        //             many_npos => {
-        //                 graph.add_edge(segment_start_pos, cur_pos, cost);
-        //                 q.extend(many_npos.iter().copied().map(|npos| (cur_pos, npos)));
-        //                 break;
-        //             }
-        //         }
-        //     }
-        // }
-
         graph
     }
 }

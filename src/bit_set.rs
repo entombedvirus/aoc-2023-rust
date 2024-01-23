@@ -26,6 +26,15 @@ impl std::iter::IntoIterator for BitSet {
     }
 }
 
+impl std::iter::FromIterator<usize> for BitSet {
+    fn from_iter<T: IntoIterator<Item = usize>>(iter: T) -> Self {
+        let bits = iter
+            .into_iter()
+            .fold(0_usize, |bits, idx| bits | (1 << idx));
+        Self(bits as u64)
+    }
+}
+
 #[derive(Debug)]
 pub struct BitSetIter(u64);
 
